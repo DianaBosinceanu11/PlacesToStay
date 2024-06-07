@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Accommodations Search</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        .result {
+            margin-top: 20px;
+        }
+        .result-item {
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        .book-button {
+            background-color: #73cf76;
+            color: white;
+            padding: 10px;
+            border: none;
+            cursor: pointer;
+        }
+        .error {
+            color: rgb(158, 47, 47);
+        }
+        .success {
+            color: rgb(55, 240, 55);
+        }
+        /* Modal styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgb(0,0,0);
+            background-color: rgba(0,0,0,0.4);
+            padding-top: 60px;
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: 5% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+        }
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+        }
+        .close:hover,
+        .close:focus {
+            color: black;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        #map {
+            height: 500px;
+            width: 100%;
+            margin-top: 20px;
+        }
+        .login-status {
+            float: right;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Search for Accommodations</h1>
+    <div id="login-status" class="login-status hidden">
+        Logged in as <span id="logged-in-username"></span> 
+        <button id="logout-button">Logout</button>
+    </div>
+    <form id="login-form">
+        <label for="username">Username:</label>
+        <input type="text" id="username" name="username" required>
+        <label for="password">Password:</label>
+        <input type="password" id="password" name="password" required>
+        <button type="submit">Login</button>
+    </form>
+    <div id="login-message"></div>
+
+    <form id="search-form">
+        <label for="location">Location:</label>
+        <input type="text" id="location" name="location" required>
+        <button type="submit">Search</button>
+    </form>
+
+    <div id="results" class="result"></div>
+    <div id="message" class="message"></div>
+
+    <!-- Booking Modal -->
+    <div id="bookingModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>Book Accommodation: <span id="modalAccName"></span></h2>
+            <form id="booking-form">
+                <input type="hidden" id="modalAccID">
+                <label for="modalDate">Date:</label>
+                <input type="date" id="modalDate" name="modalDate" required>
+                <label for="modalPeople">Number of People:</label>
+                <input type="number" id="modalPeople" name="modalPeople" min="1" required>
+                <button type="submit">Book</button>
+            </form>
+            <div id="modalMessage" class="message"></div>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            checkLoginStatus();
+        });
+
+        function checkLoginStatus() {
+            fetch('http://localhost:3000/auth/current-user')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.user) {
+                        showLoginStatus(data.user);
+                    } else {
+                        showLoginForm();
+                    }
+                })
+                .catch(error => console.error('Error:', error));
+        }
+
+        function showLoginStatus(username) {
+            document.getElementById('logged-in-username').textContent = username;
+            document.getElementById('login-status').classList.remove('hidden');
+            document.getElementById('login-form').classList.add('hidden');
+        }
+
+        function showLoginForm() {
+            document.getElementById('login-status').classList.add('hidden');
+            document.getElementById('login-form').classList.remove('hidden');
+        }
+
+        document.getElementById('login-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            fetch('http://localhost:3000/auth/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ username, password })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    document.getElementById('login-message').textContent = data.error;
+                } else {
+                    showLoginStatus(data.user);
+                    document.getElementById('login-message').textContent = '';
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+        });
+
+        document.getElementById('logout-button').addEventListener('click', function() {
+            fetch('http://localhost:3000/auth/logout', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                showLoginForm();
+                document.getElementById('login-message').textContent = data.message;
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+        });
+
+        document.getElementById('search-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const location = document.getElementById('location').value;
+            fetch(`http://localhost:3000/accommodation/${location}`)
+                .then(response => response.json())
+                .then(data => {
+                    const resultsDiv = document.getElementById('results');
+                    resultsDiv.innerHTML = ''; // Clear previous results
+
+                    data.forEach(accommodation => {
+                        const resultItem = document.createElement('div');
+                        resultItem.className = 'result-item';
+                        resultItem.innerHTML = `
+                            <h2>${accommodation.name}</h2>
+                            <p>${accommodation.description}</p>
+                            <p>Type: ${accommodation.type}</p>
+                            <p>Location: ${accommodation.location}</p>
+                            <p>Latitude: ${accommodation.latitude}, Longitude: ${accommodation.longitude}</p>
+                            <button class="book-button" data-id="${accommodation.id}" data-name="${accommodation.name}">Book</button>
+                        `;
+                        resultsDiv.appendChild(resultItem);
+                    });
+                    addBookButtonListeners();
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                });
+        });
+
+        function addBookButtonListeners() {
+            const bookButtons = document.querySelectorAll('.book-button');
+            bookButtons.forEach(button => {
+                button.addEventListener('click', function() {
+                    const accID = this.getAttribute('data-id');
+                    const accName = this.getAttribute('data-name');
+                    openBookingModal(accID, accName);
+                });
+            });
+        }
+
+        function openBookingModal(accID, accName) {
+            const modal = document.getElementById('bookingModal');
+            const span = document.getElementsByClassName('close')[0];
+
+            document.getElementById('modalAccID').value = accID;
+            document.getElementById('modalAccName').textContent = accName;
+
+            modal.style.display = 'block';
+
+            span.onclick = function() {
+                modal.style.display = 'none';
+            }
+
+            window.onclick = function(event) {
+                if (event.target == modal) {
+                    modal.style.display = 'none';
+                }
+            }
+
+            document.getElementById('booking-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const thedate = document.getElementById('modalDate').value;
+    const npeople = document.getElementById('modalPeople').value;
+    const accID = document.getElementById('modalAccID').value;
+    const accName = document.getElementById('modalAccName').textContent;
+    const username = document.getElementById('logged-in-username').textContent;
+
+    const bookingData = {
+        accID: accID,
+        thedate: thedate,
+        npeople: npeople
+    };
+
+    fetch('http://localhost:3000/bookings', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(bookingData)
+    })
+    .then(response => response.json().then(data => ({ status: response.status, body: data })))
+    .then(({ status, body }) => {
+        const modalMessageDiv = document.getElementById('modalMessage');
+        if (status === 201) {
+            modalMessageDiv.className = 'success';
+            modalMessageDiv.innerHTML = `
+                You have successfully booked <strong>${accName}</strong> on <strong>${thedate}</strong> for <strong>${npeople}</strong> people.
+            `;
+        } else {
+            modalMessageDiv.className = 'error';
+            modalMessageDiv.textContent = body.error;
+        }
+    })
+    .catch(error => {
+        const modalMessageDiv = document.getElementById('modalMessage');
+        modalMessageDiv.className = 'error';
+        modalMessageDiv.textContent = 'An unexpected error occurred. Please try again later.';
+    });
+});
+
+        }
+
+        // Initialize the map
+        const map = L.map('map').setView([51.505, -0.09], 13); // Default view centered on London
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        function addMarkers(data) {
+            data.forEach(accommodation => {
+                const marker = L.marker([accommodation.latitude, accommodation.longitude]).addTo(map);
+                marker.bindPopup(`<b>${accommodation.name}</b><br>${accommodation.description}`);
+            });
+        }
+    </script>
+</body>
+</html>
